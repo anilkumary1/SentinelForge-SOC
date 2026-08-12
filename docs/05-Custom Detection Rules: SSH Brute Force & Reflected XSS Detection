@@ -1,77 +1,545 @@
-Objective
 
-Build and tune custom Wazuh detection rules for two distinct attack categories: SSH brute-force login attempts (host-based, auth log source) and reflected Cross-Site Scripting against DVWA (web-based, Apache access log source). Validate each rule fires correctly and maps to the appropriate MITRE ATT&CK technique.
+## Objective
 
-Lab Environment
-Machine	OS	Purpose
-Ubuntu 1	Ubuntu 24.04 LTS	Wazuh Manager (local_rules.xml lives here)
-Ubuntu 2	Ubuntu 24.04 LTS	Wazuh Agent + DVWA (attack surface)
-Part 1 — SSH Brute Force Detection
-Step 1: First attempt — a rule that looked right but wasn't
+Build and tune custom Wazuh detection rules for two distinct attack categories:
 
-The initial rule chained off Wazuh's default SSH auth-fail rule (5760) with no frequency threshold:
+1. **SSH brute-force login attempts** — host-based detection using authentication logs.
+2. **Reflected Cross-Site Scripting (XSS)** against DVWA — web-based detection using Apache access logs.
 
-xml
+The objective was not simply to make a rule fire, but to ensure that the rule detects the intended **behavior**, minimizes false positives, and maps correctly to the relevant **MITRE ATT&CK technique**.
+
+---
+
+## Lab Environment
+
+| Machine  | OS               | Purpose                             |
+| -------- | ---------------- | ----------------------------------- |
+| Ubuntu 1 | Ubuntu 24.04 LTS | Wazuh Manager / custom rules        |
+| Ubuntu 2 | Ubuntu 24.04 LTS | Wazuh Agent + DVWA / attack surface |
+
+Custom Wazuh rules were maintained on Ubuntu 1 in:
+
+```text
+/var/ossec/etc/rules/local_rules.xml
+```
+
+Ubuntu 2 generated the authentication and web activity that was collected by the Wazuh agent and forwarded to the manager.
+
+---
+
+# Part 1 — SSH Brute Force Detection
+
+## Step 1 — Initial Rule: A Rule That Looked Right but Wasn't
+
+The first implementation chained directly from Wazuh's default SSH authentication-failure rule `5760`:
+
+```xml
 <rule id="100020" level="12">
   <if_sid>5760</if_sid>
   <description>Custom: SSH authentication failed</description>
-  <mitre><id>T1110.001</id></mitre>
+  <mitre>
+    <id>T1110.001</id>
+  </mitre>
   <group>authentication_failed,ssh,bruteforce,attack</group>
 </rule>
+```
 
-Problem identified: this rule fired on every single failed login — including one-off typos — not on an actual burst pattern. Tagging a single failure as "bruteforce" (T1110.001) was inaccurate and would have flooded the dashboard with false positives.
+### Why This Was a Problem
 
-Step 2: Corrected rule with frequency/timeframe correlation
-xml
+The rule technically worked, but it detected the **wrong behavior**.
+
+Because it triggered whenever rule `5760` matched, a single failed SSH login generated a `100020` alert.
+
+For example:
+
+```text
+User enters an incorrect password
+        ↓
+SSH authentication failure
+        ↓
+Wazuh rule 5760
+        ↓
+Custom rule 100020
+        ↓
+"SSH brute force"
+```
+
+A single failed login could simply be:
+
+* A mistyped password
+* An administrator entering an incorrect credential
+* A legitimate user forgetting a password
+
+Therefore, classifying every individual authentication failure as **MITRE T1110.001 — Password Guessing** would create unnecessary false positives.
+
+### Lesson
+
+A detection rule should identify the **behavioral pattern**, not merely the individual event associated with that behavior.
+
+---
+
+# Step 2 — Corrected Rule: Frequency-Based Correlation
+
+The rule was redesigned to require multiple authentication failures from the same source within a defined period:
+
+```xml
 <rule id="100020" level="12" frequency="6" timeframe="120">
   <if_matched_sid>5760</if_matched_sid>
   <same_source_ip />
   <description>Custom: SSH brute force - 6 failed logins in 2 min</description>
-  <mitre><id>T1110.001</id></mitre>
-  <group>authentication_failed,ssh,bruteforce,attack,</group>
+  <mitre>
+    <id>T1110.001</id>
+  </mitre>
+  <group>authentication_failed,ssh,bruteforce,attack</group>
 </rule>
+```
 
-frequency="6" timeframe="120" requires 6 matches from the same source IP within 120 seconds before this rule fires — this is what actually constitutes a brute-force pattern rather than isolated failures.
+### Detection Logic
 
-Step 3: Test
+The rule requires:
 
-Manually failed SSH login 6+ times in under 2 minutes from a test source, then confirmed rule 100020 fired (not the underlying single-failure rule 5760 alone) in the Wazuh dashboard.
+```text
+6 matches
++
+within 120 seconds
++
+same source IP
+=
+SSH brute-force alert
+```
 
-Part 2 — Reflected XSS Detection
-Step 1: Rule definition
-xml
+This provides significantly stronger evidence of automated or repeated credential guessing than a single authentication failure.
+
+### Why `if_matched_sid`?
+
+The corrected rule uses:
+
+```xml
+<if_matched_sid>5760</if_matched_sid>
+```
+
+rather than simply chaining with:
+
+```xml
+<if_sid>5760</if_sid>
+```
+
+The purpose is to correlate previous matches of the authentication-failure rule and evaluate whether the required frequency threshold has been reached.
+
+### Why `same_source_ip`?
+
+The:
+
+```xml
+<same_source_ip />
+```
+
+condition ensures that the six authentication failures originate from the same source.
+
+Without source correlation, unrelated failed logins from different hosts could potentially contribute to the frequency threshold.
+
+---
+
+# Step 3 — Testing
+
+The detection was tested by intentionally generating multiple failed SSH authentication attempts from a controlled test source.
+
+The test condition was:
+
+```text
+6+ failed SSH logins
+within approximately 2 minutes
+from the same source
+```
+
+The expected behavior was:
+
+```text
+Individual failures
+        ↓
+Wazuh rule 5760
+        ↓
+Frequency correlation
+        ↓
+Rule 100020
+        ↓
+SSH brute-force detection
+```
+
+The Wazuh dashboard confirmed that the custom rule `100020` fired after the required threshold was reached.
+
+The underlying rule `5760` could still appear for individual authentication failures, but the custom brute-force detection required the correlated burst.
+
+---
+
+# Part 2 — Reflected XSS Detection
+
+## Step 1 — Custom XSS Rule
+
+The next detection targeted reflected Cross-Site Scripting activity against DVWA.
+
+The custom rule was:
+
+```xml
 <rule id="100012" level="8">
   <if_sid>31105</if_sid>
   <description>meduilm-HIGH: XSS attempt detected against monitored application</description>
-  <group>attack,web,xss_attempt,</group>
+  <group>attack,web,xss_attempt</group>
 </rule>
+```
 
-Chains off Wazuh's stock web-attack rule group (31105), which already includes generic XSS pattern matching against the Apache access log.
+The rule builds on Wazuh's existing web-attack detection rule `31105`.
 
-Step 2: Test
+Rather than attempting to create a complete XSS parser from scratch, the custom rule adds a project-specific detection and alert description on top of the existing Wazuh detection logic.
 
-Submitted <script>alert('SentinelForge-Test')</script> into DVWA's Reflected XSS module at Low security. Confirmed:
+---
 
-JavaScript alert fired in-browser (proof the vulnerability executed)
-Rule 100012 fired in Wazuh Discover, with the payload visible in the expanded alert's URL field
-Step 3: Payload variation testing
+## Step 2 — DVWA Test
 
-Also tested <img src=x onerror=alert('XSS2')> and <svg onload=alert('XSS3')> to confirm the underlying decoder/rule wasn't only matching the literal <script> string but a broader XSS-pattern group.
+The test environment consisted of:
 
-Troubleshooting
+```text
+Ubuntu 2
+   ↓
+Apache
+   ↓
+DVWA
+   ↓
+Reflected XSS module
+```
 
-Problem: Bruteforce rule fired on every single failure Cause: no frequency/timeframe/same_source_ip correlation on initial rule. Solution: added correlation attributes (Step 2 above).
+DVWA was configured at **Low** security for controlled testing.
 
-Verification Checklist
- SSH bruteforce rule fires only on correlated burst, not single failures
- Bruteforce rule correctly tagged with T1110.001
- XSS rule fires on DVWA reflected XSS payload
- XSS rule confirmed against multiple payload variants
- Both rules visible in Wazuh Discover with correct rule ID and description
-Lessons Learned
-A rule that "fires" isn't automatically a correct rule — matching the pattern (burst behavior) rather than the symptom (a single failed login) is what separates a real detection from noise.
-MITRE technique tags should reflect what the rule actually detects, not just where it's chained from — mislabeling a single-failure rule as T1110.001 would have been misleading in any audit of the ruleset.
-Testing against payload variants (not just one canonical example) builds confidence that a rule generalizes rather than pattern-matching one specific string.
-Next Phase
+A test XSS payload was submitted through the reflected XSS functionality:
 
-The next document is docs/06-SQL-Injection-Detection.md, which covers a considerably harder detection engineering problem: getting a custom SQL injection rule to fire at all, and the multi-stage debugging process required to find out why it initially didn't.
+```html
+<script>alert('SentinelForge-Test')</script>
+```
+
+### Expected Result
+
+The payload should be:
+
+1. Received by DVWA.
+2. Reflected into the HTTP response.
+3. Executed by the browser.
+4. Recorded in the Apache access log.
+5. Collected by the Wazuh agent.
+6. Decoded and matched by Wazuh's web-attack detection.
+7. Correlated with custom rule `100012`.
+
+The browser JavaScript alert provided direct confirmation that the reflected XSS payload executed.
+
+The corresponding Wazuh event showed the request and payload in the expanded alert information, including the URL field.
+
+---
+
+# Step 3 — XSS Payload Variation Testing
+
+Testing only one payload can produce misleading confidence in a detection rule.
+
+Additional controlled payload variants were therefore tested:
+
+```html
+<img src=x onerror=alert('XSS2')>
+```
+
+and:
+
+```html
+<svg onload=alert('XSS3')>
+```
+
+The purpose was to determine whether the detection depended exclusively on the literal:
+
+```text
+<script>
+```
+
+string.
+
+Testing multiple payload structures provides greater confidence that the underlying Wazuh web-attack detection is identifying a broader class of XSS patterns rather than simply matching one specific payload.
+
+---
+
+# Detection Flow
+
+The complete reflected-XSS detection path was:
+
+```text
+XSS payload
+     ↓
+DVWA
+     ↓
+Apache access.log
+     ↓
+Wazuh Agent
+     ↓
+Apache decoder
+     ↓
+Wazuh web-attack detection
+     ↓
+Rule 31105
+     ↓
+Custom Rule 100012
+     ↓
+Wazuh Dashboard
+```
+
+This demonstrates an important SOC detection-engineering principle:
+
+> The detection does not have to identify the attack directly at the application layer. It can detect the attack through the telemetry generated by the vulnerable application.
+
+---
+
+# Troubleshooting
+
+## Problem 1 — Brute-Force Rule Fired on Every Failed Login
+
+### Cause
+
+The initial rule used:
+
+```xml
+<if_sid>5760</if_sid>
+```
+
+without any frequency or timeframe correlation.
+
+As a result, every authentication failure generated the custom alert.
+
+### Solution
+
+Frequency and source correlation were added:
+
+```xml
+frequency="6"
+timeframe="120"
+```
+
+together with:
+
+```xml
+<if_matched_sid>5760</if_matched_sid>
+<same_source_ip />
+```
+
+The detection then represented a repeated authentication pattern rather than a single failed login.
+
+---
+
+## Problem 2 — XSS Detection Required an Existing Web-Attack Match
+
+The XSS rule was intentionally chained to Wazuh's existing web-attack rule:
+
+```xml
+<if_sid>31105</if_sid>
+```
+
+This means the custom rule depends on the underlying web-attack detection successfully identifying the request.
+
+Therefore, when troubleshooting the custom XSS rule, both levels need to be checked:
+
+```text
+Apache access.log
+        ↓
+Apache decoder
+        ↓
+Rule 31105
+        ↓
+Rule 100012
+```
+
+If rule `31105` does not match, rule `100012` will not fire.
+
+---
+
+# Verification Checklist
+
+* [x] SSH brute-force rule fires after the configured frequency threshold.
+* [x] Single SSH authentication failures do not independently represent a brute-force event.
+* [x] Brute-force detection uses `same_source_ip`.
+* [x] Brute-force rule is mapped to MITRE `T1110.001`.
+* [x] Reflected XSS payload successfully executes in DVWA.
+* [x] XSS activity is recorded through the Apache access log.
+* [x] Custom XSS rule `100012` fires through the underlying web-attack detection.
+* [x] Multiple XSS payload variations were tested.
+* [x] Both custom rules are visible in Wazuh Discover.
+* [x] Rule IDs and descriptions were verified in the resulting alerts.
+
+---
+
+# MITRE ATT&CK Mapping
+
+| Detection       | Wazuh Rule | MITRE Technique      | Technique                      |
+| --------------- | ---------: | -------------------- | ------------------------------ |
+| SSH brute force |   `100020` | `T1110.001`          | Password Guessing              |
+| Reflected XSS   |   `100012` | Web attack detection | XSS / Web exploitation context |
+
+For the SSH detection, `T1110.001` directly represents the credential-guessing behavior being detected.
+
+For the XSS detection, the custom rule currently inherits the detection behavior of Wazuh's web-attack rule. The MITRE mapping should therefore be kept consistent with what the underlying rule actually detects rather than assigning a technique solely because the application being tested is DVWA.
+
+---
+
+# Lessons Learned
+
+## 1. A Rule Firing Does Not Automatically Mean the Rule Is Correct
+
+The first SSH rule successfully generated alerts, but it was not a good brute-force detector.
+
+Detection quality depends on whether the rule identifies the intended **behavioral pattern**.
+
+```text
+Event detection ≠ Behavioral detection
+```
+
+A single authentication failure is an event.
+
+Multiple failures from the same source within a short period provide stronger evidence of brute-force activity.
+
+---
+
+## 2. Correlation Reduces Detection Noise
+
+Adding:
+
+```xml
+frequency="6"
+timeframe="120"
+```
+
+and:
+
+```xml
+<same_source_ip />
+```
+
+changed the detection from:
+
+```text
+"Someone failed authentication"
+```
+
+to:
+
+```text
+"One source repeatedly failed authentication within a short period"
+```
+
+This is much more useful from a SOC perspective.
+
+---
+
+## 3. MITRE Mapping Must Match the Actual Detection
+
+MITRE ATT&CK tags should describe what the rule actually detects.
+
+Incorrect:
+
+```text
+Single authentication failure → T1110.001
+```
+
+More defensible:
+
+```text
+Repeated credential failures / password guessing
+→ T1110.001
+```
+
+The mapping should therefore be reviewed whenever the detection logic changes.
+
+---
+
+## 4. Test Detection Rules With Variations
+
+A detection rule should not be considered reliable merely because one test payload triggered it.
+
+For XSS, multiple payload structures were tested.
+
+For SSH brute force, the behavior was tested using repeated authentication failures.
+
+This provides greater confidence that the detection is identifying the underlying attack pattern rather than one specific string.
+
+---
+
+# Detection Engineering Takeaway
+
+These two detections demonstrate two different approaches to Wazuh rule development:
+
+### SSH Brute Force
+
+```text
+Individual events
+      ↓
+Frequency correlation
+      ↓
+Source correlation
+      ↓
+Behavioral detection
+```
+
+### Reflected XSS
+
+```text
+Application request
+      ↓
+Apache access log
+      ↓
+Wazuh decoder
+      ↓
+Existing web-attack detection
+      ↓
+Custom project rule
+```
+
+The key lesson is that effective detection engineering is not simply writing XML rules. It requires understanding the telemetry source, the decoder, the underlying rule hierarchy, correlation requirements, false-positive potential, and the behavior being detected.
+
+---
+
+# Next Phase
+
+The next stage is **SQL Injection Detection**.
+
+The following document will cover:
+
+```text
+docs/06-SQL-Injection-Detection.md
+```
+
+This detection presented a more difficult engineering problem because the initial custom SQL injection rule did not fire as expected.
+
+The troubleshooting process required investigating:
+
+* Apache access-log visibility
+* URL encoding
+* Wazuh decoder behavior
+* Rule matching
+* PCRE2 pattern construction
+* Rule hierarchy
+* Wazuh manager configuration validation
+* Event correlation
+* Final alert verification
+
+The objective is to document not only the final SQL injection rule, but the **debugging process that led to it**.
+
+This continues the broader detection-engineering workflow:
+
+```text
+Attack
+  ↓
+Telemetry
+  ↓
+Log source
+  ↓
+Decoder
+  ↓
+Detection rule
+  ↓
+Correlation
+  ↓
+MITRE mapping
+  ↓
+Alert validation
+```
