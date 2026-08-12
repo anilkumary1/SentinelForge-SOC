@@ -116,3 +116,7 @@ Purpose:
 ✅ XSS Detection
 
 ✅ SSH Brute-force Detection
+
+✅ XSS Detection
+
+✅ SSH Brute-force Detection
