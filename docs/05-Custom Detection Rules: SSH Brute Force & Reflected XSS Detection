@@ -1,35 +1,47 @@
-Objective
+# Custom Detection Rules: SSH Brute Force & Reflected XSS Detection
+
+## Objective
 
 Build and tune custom Wazuh detection rules for two distinct attack categories:
 
-SSH brute-force login attempts — host-based detection using authentication logs.
-Reflected Cross-Site Scripting (XSS) against DVWA — web-based detection using Apache access logs.
+- **SSH brute-force login attempts** — host-based, authentication log source.
+- **Reflected Cross-Site Scripting (XSS)** against DVWA — web-based, Apache access log source.
 
-The objective is to validate that each rule fires correctly and maps to the appropriate MITRE ATT&CK technique.
+Validate that each rule fires correctly and maps to the appropriate MITRE ATT&CK technique.
 
-Lab Environment
-Machine	OS	Purpose
-Ubuntu 1	Ubuntu 24.04 LTS	Wazuh Manager (local_rules.xml lives here)
-Ubuntu 2	Ubuntu 24.04 LTS	Wazuh Agent + DVWA (attack surface)
-Part 1 — SSH Brute Force Detection
-Step 1: First attempt — a rule that looked right but wasn't
+---
 
-The initial rule chained off Wazuh's default SSH authentication-failure rule (5760) without a frequency threshold:
+# Lab Environment
 
+| Machine  | OS               | Purpose                                         |
+| -------- | ---------------- | ----------------------------------------------- |
+| Ubuntu 1 | Ubuntu 24.04 LTS | Wazuh Manager (`local_rules.xml` lives here)    |
+| Ubuntu 2 | Ubuntu 24.04 LTS | Wazuh Agent + DVWA (attack surface)             |
+
+---
+
+# Part 1 - SSH Brute Force Detection
+
+## Step 1 - First Attempt: A Rule That Looked Right but Wasn't
+
+The initial rule chained off Wazuh's default SSH authentication-failure rule (`5760`) with no frequency threshold.
+
+```xml
 <rule id="100020" level="12">
   <if_sid>5760</if_sid>
   <description>Custom: SSH authentication failed</description>
   <mitre><id>T1110.001</id></mitre>
   <group>authentication_failed,ssh,bruteforce,attack</group>
 </rule>
+Problem Identified
 
-Problem identified: This rule fired on every single failed login, including one-off password typos, rather than detecting an actual burst of failed attempts.
+This rule fired on every single failed login, including one-off password typos, rather than detecting an actual burst pattern.
 
-Tagging a single authentication failure as brute force (T1110.001) was inaccurate and could have flooded the dashboard with false positives.
+Tagging a single failure as brute force (T1110.001) was inaccurate and would have flooded the dashboard with false positives.
 
-Step 2: Corrected rule with frequency/timeframe correlation
+Step 2 - Corrected Rule With Frequency/Timeframe Correlation
 
-The rule was changed to require multiple failures from the same source within a defined time period:
+The rule was changed to require multiple failures from the same source within a defined time period.
 
 <rule id="100020" level="12" frequency="6" timeframe="120">
   <if_matched_sid>5760</if_matched_sid>
@@ -39,23 +51,23 @@ The rule was changed to require multiple failures from the same source within a 
   <group>authentication_failed,ssh,bruteforce,attack,</group>
 </rule>
 
-frequency="6" and timeframe="120" require six matches from the same source IP within 120 seconds before the custom rule fires.
+frequency="6" and timeframe="120" require six matches from the same source IP within 120 seconds before this rule fires.
 
-This allows the rule to detect a brute-force pattern rather than treating isolated authentication failures as brute-force activity.
+This is what allows the rule to detect a brute-force pattern rather than isolated authentication failures.
 
-Step 3: Test
+Step 3 - Test
 
-The rule was tested by manually generating six or more failed SSH login attempts within two minutes from a test source.
+The rule was tested by manually generating six or more failed SSH login attempts in under two minutes from a test source.
 
 The Wazuh Dashboard confirmed that:
 
 The underlying authentication-failure rule (5760) detected the individual failures.
 The custom rule (100020) fired after the required frequency threshold was reached.
 The custom alert represented the correlated brute-force activity rather than a single failed login.
-Part 2 — Reflected XSS Detection
-Step 1: Rule definition
+Part 2 - Reflected XSS Detection
+Step 1 - Rule Definition
 
-A custom rule was created for reflected XSS activity against DVWA:
+A custom rule was created for reflected XSS activity against DVWA.
 
 <rule id="100012" level="8">
   <if_sid>31105</if_sid>
@@ -63,11 +75,11 @@ A custom rule was created for reflected XSS activity against DVWA:
   <group>attack,web,xss_attempt,</group>
 </rule>
 
-The rule chains from Wazuh's stock web-attack rule (31105), which provides the underlying XSS pattern matching against the Apache access log.
+The rule chains off Wazuh's stock web-attack rule group (31105), which already includes generic XSS pattern matching against the Apache access log.
 
-Step 2: Test
+Step 2 - Test
 
-The test was performed against DVWA's Reflected XSS module with the security level set to Low.
+The test was performed against DVWA's Reflected XSS module at Low security.
 
 The following payload was submitted:
 
@@ -78,24 +90,25 @@ The test confirmed:
 The JavaScript alert fired in the browser, confirming that the reflected XSS payload executed.
 Rule 100012 fired in Wazuh Discover.
 The payload was visible in the expanded alert's URL field.
-Step 3: Payload variation testing
+Step 3 - Payload Variation Testing
 
-Additional payloads were tested:
+Additional payload variations were tested:
 
 <img src=x onerror=alert('XSS2')>
 
 and:
 
-<svg onload=alert('XSS3')>
-
-These variations were used to verify that the underlying detection was not dependent only on the literal <script> string, but could identify a broader XSS-pattern group.
+These variations were used to confirm that the underlying decoder/rule was not only matching the literal <script> string, but could identify a broader XSS-pattern group.
 
 Troubleshooting
-Problem: Brute-force rule fired on every single failure
+Problem - Brute-Force Rule Fired on Every Single Failure
+Cause
 
-Cause: The initial rule had no frequency, timeframe, or same_source_ip correlation.
+The initial rule had no frequency, timeframe, or same_source_ip correlation.
 
-Solution: Frequency and source-IP correlation were added to the rule:
+Solution
+
+Frequency and source-IP correlation were added to the rule:
 
 frequency="6"
 timeframe="120"
@@ -108,37 +121,31 @@ along with:
 This changed the detection from identifying individual authentication failures to identifying a repeated brute-force pattern.
 
 Verification Checklist
-
-SSH brute-force rule fires only on the correlated burst, not a single failure.
-
-Brute-force rule is tagged with T1110.001.
-
-XSS rule fires on a DVWA reflected XSS payload.
-
-XSS detection was confirmed against multiple payload variants.
-
-Both rules are visible in Wazuh Discover with the correct rule ID and description.
-
+ SSH brute-force rule fires only on the correlated burst, not single failures.
+ Brute-force rule is correctly tagged with T1110.001.
+ XSS rule fires on a DVWA reflected XSS payload.
+ XSS detection is confirmed against multiple payload variants.
+ Both rules are visible in Wazuh Discover with the correct rule ID and description.
 Lessons Learned
-1. A rule that fires is not automatically a correct detection
+1. A Rule That "Fires" Is Not Automatically a Correct Detection
 
 The initial SSH rule successfully generated alerts, but it detected individual authentication failures rather than a brute-force pattern.
 
-Matching the pattern — repeated failures within a short period — rather than the symptom — one failed login — is what makes the detection more useful and reduces noise.
+Matching the pattern — burst behavior — rather than the symptom — a single failed login — is what separates a real detection from unnecessary noise.
 
-2. MITRE technique tags should match the actual detection
+2. MITRE Technique Tags Should Reflect the Actual Detection
 
-MITRE ATT&CK mappings should reflect what the rule actually detects.
+MITRE ATT&CK technique tags should reflect what the rule actually detects, not simply where the rule is chained from.
 
-Labeling a single authentication failure as T1110.001 would be misleading because one failed login does not necessarily indicate password guessing.
+Mislabeling a single authentication failure as T1110.001 would have been misleading in an audit of the ruleset.
 
-The corrected rule detects repeated credential failures from the same source, making T1110.001 appropriate for the intended detection.
+The corrected rule detects repeated credential failures from the same source, making T1110.001 appropriate for the intended brute-force detection.
 
-3. Test against payload variations
+3. Test Against Payload Variations
 
-Testing only one canonical XSS payload can create false confidence.
+Testing against payload variants, rather than only one canonical payload, builds confidence that the rule generalizes instead of simply pattern-matching one specific string.
 
-Testing multiple payload structures helps establish that the detection is identifying a broader XSS pattern rather than matching one specific string.
+Multiple XSS payload structures were tested to verify the underlying detection was not dependent on a single <script> payload.
 
 Next Phase
 
@@ -146,4 +153,40 @@ The next document is:
 
 docs/06-SQL-Injection-Detection.md
 
-It covers a considerably harder detection-engineering problem: getting a custom SQL injection rule to fire correctly and documenting the multi-stage debugging process used to determine why the initial rule did not trigger.
+This covers a considerably harder detection-engineering problem: getting a custom SQL injection rule to fire at all, and the multi-stage debugging process required to find out why it initially did not.
+
+
+### One thing to notice
+
+This now follows the same visual structure as your `04-DVWA-Integration.md`:
+
+```text
+# Title
+## Objective
+---
+# Lab Environment
+table
+---
+# Part 1
+## Step 1
+code
+### Problem
+---
+## Step 2
+code
+---
+## Step 3
+---
+# Part 2
+...
+---
+# Troubleshooting
+...
+---
+# Verification Checklist
+...
+---
+# Lessons Learned
+...
+---
+# Next Phase
