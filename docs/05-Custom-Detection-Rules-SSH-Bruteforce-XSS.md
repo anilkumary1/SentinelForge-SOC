@@ -6,7 +6,7 @@ Build and tune custom Wazuh detection rules for two distinct attack categories: 
 ## Lab Environment
 | Machine | OS | Purpose |
 |---|---|---|
-| Ubuntu 1 | Ubuntu 24.04 LTS | Wazuh Manager (`local_rules.xml` lives here) |
+| Ubuntu 1 | Ubuntu 24.04 | Wazuh Manager (`local_rules.xml` lives here) |
 | Ubuntu 2 | Ubuntu 26.04  | Wazuh Agent + DVWA (attack surface) |
 
 ## Part 1 — SSH Brute Force Detection
