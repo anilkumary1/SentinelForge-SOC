@@ -10,8 +10,8 @@ Deploy the Damn Vulnerable Web Application (DVWA) inside a Docker container on *
 
 | Machine | OS | Purpose |
 |---------|----|---------|
-| Ubuntu 1 | Ubuntu 26.04 | Wazuh Manager + Wazuh Indexer + Wazuh Dashboard |
-| Ubuntu 2 | Ubuntu 24.04 LTS | Wazuh Agent + Docker + DVWA |
+| Ubuntu 1 | Ubuntu 24.04 | Wazuh Manager + Wazuh Indexer + Wazuh Dashboard |
+| Ubuntu 2 | Ubuntu 26.04 | Wazuh Agent + Docker + DVWA |
 
 ---
 
