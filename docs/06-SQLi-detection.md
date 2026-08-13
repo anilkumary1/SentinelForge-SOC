@@ -6,8 +6,8 @@ Build a custom Wazuh rule to detect SQL injection attempts against DVWA. This do
 ## Lab Environment
 | Machine | OS | Purpose |
 |---|---|---|
-| Ubuntu 1 | Ubuntu 24.04 LTS | Wazuh Manager |
-| Ubuntu 2 | Ubuntu 24.04 LTS | Wazuh Agent + DVWA |
+| Ubuntu 1 | Ubuntu 24.04 | Wazuh Manager |
+| Ubuntu 2 | Ubuntu 26.04  | Wazuh Agent + DVWA |
 
 ## The Rule (final, working version)
 ```xml
