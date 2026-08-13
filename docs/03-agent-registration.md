@@ -10,8 +10,8 @@ Register the Wazuh Agent running on **Ubuntu 2 (24.04 LTS)** with the Wazuh Mana
 
 | Machine | OS | Purpose |
 |---------|----|---------|
-| Ubuntu 1 | Ubuntu 26.04 | Wazuh Manager + Wazuh Indexer + Wazuh Dashboard |
-| Ubuntu 2 | Ubuntu 24.04 LTS | Wazuh Agent |
+| Ubuntu 1 | Ubuntu 24.04  | Wazuh Manager + Wazuh Indexer + Wazuh Dashboard |
+| Ubuntu 2 | Ubuntu 26.04  | Wazuh Agent |
 
 ---
 
